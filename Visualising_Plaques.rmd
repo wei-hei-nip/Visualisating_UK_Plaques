@@ -1,0 +1,489 @@
+---
+title: "Visualising Open Plaque's UK Data"
+date: "02/05/2024"
+github: https://github.com/wei-hei-nip/Visualisating_UK_Plaques
+
+output:
+  html_document: default
+  pdf_document: default
+csl: https://raw.githubusercontent.com/citation-style-language/styles/master/apa-6th-edition.csl
+
+references:
+- id: openplaques2024
+  title: openplaques.org database
+  author:
+  - literal: openplaques.org
+  URL: https://openplaques.org/data/
+  type: webpage
+  issued:
+    year: 2024
+- id: r-error-messages2024
+  title: r-error-messages
+  author:
+  - literal: programmingr.com
+  URL: https://www.programmingr.com/r-error-messages/error-in-contrib-urlrepos-source-r-markdown/#
+  type: webpage
+  issued:
+    year: 2024
+- id: textminingR
+  title: Introduction to the tm Package Text Mining in R
+  author: Dr. Ingo Feinerer
+  URL: https://cran.r-project.org/web/packages/tm/vignettes/tm.pdf
+  type: vignette
+  issued:
+    year: 2024
+- id: naturalearth
+  title: Natural Earth Admin 1 - States and Provinces
+  author: 
+  literal: https://www.naturalearthdata.com/
+  URL: https://www.naturalearthdata.com/downloads/10m-cultural-vectors/10m-admin-1-states-provinces/
+  type: webpage
+  issued:
+    year: 2024
+---
+# 1. Introduction
+
+Open Plaques is a community-based project which catalogues, curates and promotes community plaques and historical markers throughout the world. The project provides three sets of data to be downloaded, including ‘Complete’, ‘UK’ and ‘London’ which are compiled of data from all plaques over the world, in the UK and London respectively. This looks at the ‘UK’ data made available in November 2023. 
+
+This focuses on three aspects including 1) the Distribution of the lead subject sex of the plaques over the years, 2) the relationship of inscription contents with male and female as lead subject of the plaques and 3) the geographic distribution of the plaques. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)  #for general plotting
+
+library(tm) #for text mining process
+library(textstem) #fortext stemming and lemmatization
+library(wordcloud)  #for wordcloud visualisation
+library(RColorBrewer) #for colour scheme
+
+library(rnaturalearth)  #for getting world map data
+library(sf) #for processing spatial data
+```
+
+# 2. Data
+```{r load-data, include=FALSE}
+# Load the Data
+# Alter setwd() path to directory containing the data
+setwd("")
+plaques <- read.csv("data/open_plaques_UK.csv", encoding="UTF-8")
+```
+```{r}
+head(plaques)
+```
+
+A brief understanding of the data shows that the dataset has 17570 rows, representing each plaque and 36 columns, representing the information. The column names are straightforward and explicit. A brief look at the plaques’ ID suggested there are no duplicate plaques. However, this does not take into account data entry errors. The data is processed and cleaned based on the needs of each visualisation method.
+
+```{r}
+dim(plaques)
+```
+```{r}
+colnames(plaques)
+```
+```{r}
+nrow(plaques[!(plaques$id),])
+```
+
+# 3. Relationship of Plaques Erected Years and the Lead Subject Sex
+
+This section focuses on the relationship between the plaques erected over the years and the sex of the lead subject of the plaque. It mainly draws information from the ‘erected’ and ‘lead_subject_sex’ columns. Before the visualisation, the data should be processed to remove any missing values or unusual data. 
+
+The following gets the count and percentage of missing values in the ‘erected’ column. It suggested that over 68% of the data has no erected year data. 
+
+### Prevewing Plaques Erected Years
+```{r}
+# Calculate the number of NA values in plaques$erected
+erected_na <-
+  plaques$erected %>%
+  is.na() %>%
+  sum()
+
+erected_na_percentage <- (erected_na/length(plaques$erected))*100
+
+sprintf("Number of NA in plaques$erected: %s out of %s (%s%%)", erected_na, length(plaques$erected), round(erected_na_percentage, 2))
+```
+
+By previewing the earliest and latest erected years of the plaques. There are two plaques with erected years equal to 1 which seems impossible. A preview of the inscription of these plaques suggested that the plaques’ erected year equal to 1 is not possible. The latest year 2023 is expected since the dataset was compiled in November 2023. 
+
+```{r}
+#checking the erected data for anomalies 
+head(sort(plaques[!is.na(plaques$erected),]$erected))
+head(sort(plaques[!is.na(plaques$erected),]$erected, decreasing = TRUE))
+```
+```{r}
+# checking the 2 records with plaques$erected == 1
+plaques[!is.na(plaques$erected) & plaques$erected==1,]$title
+```
+
+The plaques without erected years or with erected years equal to one are all considered to as “Doesn’t Have Erected Years” and “Have Erected Years” if it has an erected year value. These classes are saved to a new dataset column as ‘years_na’. There are significantly more plaques that do not have an erected year.
+
+```{r}
+# Visualise the amount of missing and non missing values in plaques$erected
+# create new column to categorise missing and non-missing value to 'Have Erected Years' and "Doesn't Have Erected Years"
+plaques$years_na <- ifelse(!is.na(plaques$erected) & plaques$erected!=1, 'Have Erected Years', "Doesn't Have Erected Years") 
+table(plaques$years_na)
+```
+
+A new dataset is saved as ‘plaques_with_erected_years’ and is created to only contain plaques with erected years. 
+
+```{r}
+# Create new table of only data with erected years
+plaques_with_erected_years <- plaques[plaques$years_na=='Have Erected Years',]
+```
+
+### Prevewing Plaques Lead Subject Sex
+
+The following shows that around 14% of the data is missing data. It also shows the number of plaques of each lead subject sex. It is noted that this statistic is acquired given that the plaques have an erected year.
+
+```{r}
+# Different type in plaques_with_erected_years$lead_subject_sex
+table(plaques_with_erected_years$lead_subject_sex)
+
+# Calculate the number of missing values "" in plaques_with_erected_years$lead_subject_sex
+lead_subject_sex_na <- nrow(plaques_with_erected_years[plaques_with_erected_years$lead_subject_sex =="", ])
+
+lead_subject_sex_na_percentage <- (lead_subject_sex_na/length(plaques_with_erected_years$lead_subject_sex))*100
+
+sprintf("Number of empty value in plaques$erected: %s out of %s (%s%%)", lead_subject_sex_na, length(plaques_with_erected_years$lead_subject_sex), round(lead_subject_sex_na_percentage, 2))
+```
+
+A cleaned data is saved as ‘clean_erected_sex’ which is filtered from the ‘plaques_with_erected_years’ which the lead subject sex data is filtered to not contain the empty string value “”. There are significantly more plaques of males than females, which has the least quantity in all three classes. 
+
+```{r}
+# Getting a clean subset of data satisfying 3 conditions
+  # 1. plaques$erected != NA (cleaned as plaques_with_erected_years)
+  # 2. plaques$erected != 1 (cleaned as plaques_with_erected_years)
+  # 3. plaques$lead_subject_sex != ""
+
+clean_erected_sex <- plaques_with_erected_years[plaques_with_erected_years$lead_subject_sex!="",] 
+
+clean_erected_sex %>% select(years_na, lead_subject_sex) %>% table()
+```
+
+##### Visualisation 3A. Amount of Plaques Erected between 1600 and 2023
+
+Visualisation 3A is a stacked histogram of the number of plaques erected between 1600 and 2023, that all plaques in the ‘clean_erected_sex’ fall within this year range. Each bar of the histogram represents a decade. The stacks are classified into male, female or object.
+
+The histogram shows that the number of plaques erected per 10 years is below 100 and began to rise significantly since the mid-20th century, and rose to its peak in the 2010s with over 1300 plaques erected. It should be noted that the number of plaques in the 2020s is only counted up to November 2023.
+
+The plot clearly shows that ‘male’ has the larger portion of plaques, and the number of ‘female’ plaques increased over the years. This histogram is good at showing the number of plaques erected over the years. However, due to the scale of the plot, it is harder to understand the proportion of different lead subject sex plaques.
+
+```{r}
+ggplot(clean_erected_sex, aes(x = erected, fill = lead_subject_sex)) +
+  geom_histogram(binwidth=10, position = "stack", color = "black")+
+  labs(title='Number of Plaques Erected between 1600 and 2023',
+       x='Year Erected',
+       y='Count',
+       fill='Lead Subject Sex')+
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 12))
+```
+
+##### 3B. Percentage of Plaques by Lead Subject Sex Erected between 1600 and 2023
+
+Visualisation 3B is a percentage histogram which shows the proportion of different lead subject sex plaques. The plot shows that the number of plaques erected is dominated by males in the majority of the years and shows varying proportions. It is shown that the first female plaque was first erected later than the two classes in the 1880s. The next two decades showed a short increase in ‘female’ plaques but dropped significantly in the next decade. Since the 1910s, the proportion of ‘female’ plaques increased steadily. The ‘object’ class also varies in proportion throughout the years. This plot can show the proportion of lead subject sex over the years. However, it fails to show the count of plaques for each sex, i.e., the increasing number of ‘female’ plaques erected.
+
+```{r}
+options(warn=-1)
+ggplot(clean_erected_sex, aes(x = erected, fill = lead_subject_sex)) +
+  geom_histogram(binwidth=10, position = "fill", color = "black")+
+  labs(title='Percentage of Plaques by Lead Subject Sex Erected between 1600 and 2023',
+       x='Year Erected',
+       y='Percentage',
+       fill='Lead Subject Sex')+
+  scale_y_continuous(labels = scales::percent_format())
+```
+
+# 4. Inscription Representation of Male and Female 
+
+This section focuses on the inscriptions of the dataset and how the context may differ between males and females. The text mining process is conducted to identify the most mentioned words in inscription related to male and female as lead subjects respectively. The results can be visualised in various ways, i.e., bar plot and word cloud. The following is a preview of the column’s information used for the data visualisation, ‘inscription’ and ‘lead_subject_sex’.
+
+```{r}
+plaques %>% head(5) %>% select(inscription, lead_subject_sex)
+```
+
+The following validates the data to find any missing or unusual data, i.e., string that has zero characters before the text mining process. There are no missing values or empty string found in the ‘inscription’ column. 
+Since the text mining process is selecting the male and female lead subjects specifically, the missing values can be ignored.
+
+```{r}
+# check missing value in plaque$inscription
+sum(is.na(plaques$inscription))
+head(sort(nchar(plaques$inscription)))
+head(sort(nchar(plaques$inscription), decreasing = TRUE))
+```
+
+```{r}
+table(plaques$lead_subject_sex)
+```
+
+### Text Mining Processing for Plaques Inscriptions of Male and Female Lead Subject
+
+The text mining process (Feinerer 2024) can be done easily with the ‘tm’ and ‘textstem’ R packages which contain methods essential to the text mining framework.
+
+The first step of the text mining process is creating a corpus of data. It is created by selecting all the inscriptions with the specified lead subject sex and merging all inscriptions into one large corpus text.
+
+The second step is data cleaning or pre-processing. It includes removing numbers, punctuation, white spaces, stop words, converting all characters to lowercase from the corpus data and lemmatization.
+
+The third step calculating the word frequency. It ultimately generates a sorted dataframe of the words and their appearing frequency in the corpus data. 
+
+The following are the text mining processes for both male and female lead subjects.
+
+##### Text Mining Processing for Male Lead Subject
+```{r}
+options(warn=-1)
+# Step 1 Corpus Data: prepare text data of plaques of male lead subject
+inscription_male <- plaques[plaques$lead_subject_sex=='male',]$inscription # get subset of data of male lead subject
+inscription_male <- Corpus(VectorSource(inscription_male)) # create corpus from text data for text mining
+
+# Step 2 Pre-processing: clean data for text mining
+inscription_male <- inscription_male %>% 
+  tm_map(removeNumbers) %>% # remove number
+  tm_map(removePunctuation) %>% # remove punctuation
+  tm_map(stripWhitespace) # remove white space
+inscription_male <- tm_map(inscription_male, content_transformer(tolower)) # convert all text to lowercase 
+inscription_male <- tm_map(inscription_male, removeWords, stopwords("english")) # remove stopwords
+inscription_male <- tm_map(inscription_male, content_transformer(lemmatize_strings)) # lemmatization, lemmatize_strings is used from textstem package for the ledmmatization of vector of strings
+
+# Step 3 Calculate Word Frequency: create matrix of words frequency using the TermDocumentMatrix()
+dtm_male <- TermDocumentMatrix(inscription_male)  
+matrix_male <- as.matrix(dtm_male)
+words <- sort(rowSums(matrix_male),decreasing=TRUE) # sort words frequency from most to less frequent
+df_inscription_male <- data.frame(word = names(words),freq=words)
+```
+
+##### Text Mining Processing for Female Lead Subject
+```{r}
+options(warn=-1)
+# Step 1 Corpus Data: prepare text data of plaques of male lead subject
+inscription_female <- plaques[plaques$lead_subject_sex=='female',]$inscription # get subset of data of female lead subject
+inscription_female <- Corpus(VectorSource(inscription_female)) # create corpus from text data for text mining
+
+# Step 2 Pre-processing: clean data for text mining
+inscription_female <- inscription_female %>% 
+  tm_map(removeNumbers) %>% # remove number
+  tm_map(removePunctuation) %>% # remove punctuation
+  tm_map(stripWhitespace) # remove white space
+inscription_female <- tm_map(inscription_female, content_transformer(tolower)) # convert all text to lowercase 
+inscription_female <- tm_map(inscription_female, removeWords, stopwords("english")) # remove stopwords
+inscription_female <- tm_map(inscription_female, content_transformer(lemmatize_strings)) # lemmatization, lemmatize_strings is used from textstem package for the ledmmatization of vector of strings
+
+# Step 3 Calculate Word Frequency: create matrix of words frequency using the TermDocumentMatrix()
+dtm_female <- TermDocumentMatrix(inscription_female)  
+matrix_female <- as.matrix(dtm_female)
+words <- sort(rowSums(matrix_female),decreasing=TRUE) # sort words frequency from most to less frequent
+df_inscription_female <- data.frame(word = names(words),freq=words)
+```
+
+### Visualisation of Plaques Inscriptions of Male and Female Lead Subject
+
+
+##### Word Count of Plaque Inscriptoins of Male Lead Subject
+
+From the text mining process, 18221 unique words are identified in the inscriptions of male lead subject plaques. 
+
+```{r}
+nrow(df_inscription_male)
+```
+
+The table shows the top ten most frequent words which are ‘live’, ‘house’, ‘build’, ‘john’, ‘bear’, ‘sir’, ‘first’, ‘site’, ‘william’ and ‘work’.
+
+```{r}
+head(df_inscription_male, 10)
+```
+
+##### 4A. Bar Plot of Word Counts in Plaques Inscriptions of Male Lead Subject
+
+Visualisation 4A is a bar plot generated to visualise the data graphically. Since space is limited, the words being plotted are limited to the top 50, and the number of words plotted can be altered. The word ‘live’ is significantly more frequent than the other words.
+
+```{r}
+max_word_plot <- 50 # number of words to be plotted
+ggplot(head(df_inscription_male, max_word_plot), aes(x=freq, y=reorder(word, freq)))+
+  geom_bar(stat = "identity",  fill='blue')+
+  labs(title='Word Counts in Plaques Inscriptions of Male Lead Subject',
+       x='frequency',
+       y='word')+
+  theme(axis.text.y = element_text(size = 7))
+```
+
+##### 4B. Wordcloud for Plaques Inscriptions of Male Lead Sbject
+
+In addition, Visualisation 4B is a word cloud generated to aesthetically present the words associated with the male lead subject sex. The word’s frequency is relative, the larger the size of the word, the more frequent it is. The colour also serves to classify the frequency of words. Due to limited space, the word cloud has a maximum word display of 200 words which can be altered. From the word cloud, words related to the male gender can be found in the top 200 most frequent words, such as ‘sir’, ‘king’ and ‘son’ etc.
+
+```{r}
+set.seed(1234) # for reproducibility
+wordcloud(words = df_inscription_male$word, 
+          freq = df_inscription_male$freq, 
+          min.freq = 1, # minimum frequency of each display word = 1
+          max.words=200, # maximum word display = 200
+          random.order=FALSE, #random order = False for reproducibility
+          rot.per=0.4, # proportion of words with 90 degree rotation
+          colors=brewer.pal(8, 'Dark2')) # colour scheme 'Dark2' is colourblind friendly
+```
+
+##### Word Count of Plaque Inscriptoins of Female Lead Subject
+
+The text mining process for inscriptions of female lead subjects identified 5654 unique words. 
+
+```{r}
+nrow(df_inscription_female)
+```
+
+The table shows the top ten most frequent words which are ‘live’, ‘house’, ‘bear’, ‘first’, ‘mary’, ‘woman’, ‘site’, ‘elizabeth’, ‘queen’ and ‘build’.
+
+```{r}
+head(df_inscription_female, 10)
+```
+
+##### 4C. Bar Plot of Word Counts in Plaques Inscriptions of Female Lead Subject
+
+In visualisation 4C, similar to the male lead subject plaques, the word ‘live’ is significantly more frequent than the other words for female lead subject plaques.
+
+```{r}
+max_word_plot <- 50 # number of words to be plotted
+ggplot(head(df_inscription_female, max_word_plot), aes(x=freq, y=reorder(word, freq)))+
+  geom_bar(stat = "identity",  fill='blue')+
+  labs(title='Word Counts in Plaques Inscriptions of Female Lead Subject',
+       x='frequency',
+       y='word')+
+  theme(axis.text.y = element_text(size = 7))
+```
+
+##### 4D. Wordcloud for Plaques Inscriptions of Female Lead Sbject
+
+Visualisation 4D is a word cloud associated with the female lead subject sex. From the word cloud, words related to the female gender can be found in the top 200 most frequent words, such as ‘woman’, ‘queen’ and ‘lady’ etc.
+
+```{r}
+set.seed(1234) # for reproducibility
+wordcloud(words = df_inscription_female$word, 
+          freq = df_inscription_female$freq, 
+          min.freq = 1, # minimum frequency of each display word = 1
+          max.words=200, # maximum word display = 200
+          random.order=FALSE, #random order = False for reproducibility
+          rot.per=0.4, # proportion of words with 90 degree rotation
+          colors=brewer.pal(8, 'Dark2')) # colour scheme 'Dark2' is colourblind friendly
+```
+
+These data visualisations (4A to 4D) attempt to visually present how males and females are described in inscriptions. There are different purposes to use three different visualisations for each set of data. It is easy to show the quantified words and frequency explicitly using tables, but the number of words being visualised each time is very limited. The bar plot allows a comparative study on what words are mentioned more, it also shows the frequency and has a fair number of words being displayed. The word cloud displays the frequency of words relatively through size and color, but benefit of the visualisation lies mainly in aesthetics, the presentation of size and colours. However, it does not tell the audience the exact frequency of each word.
+
+Furthermore, such methods are simply quantifying the word frequency and ignoring how the words are associated with males or females in terms of context. Further studies on the text analysis process could be done to study the representation of males and females in plaques. 
+
+# 5. Chropleth Map of Distributions of Plaques in United Kingdom
+
+This section aims to create a choropleth map showing the distribution of plaques in the different areas of the United Kingdom.
+
+The ‘geolocated’ column shows if a plaque has geo-referenced information. The coordinates ‘longitude’ and ‘latitude’ of the plaques are provided within the dataset. The dataset is filtered based on the ‘geolocated’ equal to true to acquire a subset of data that is geo-referenced.
+
+```{r}
+plaques %>% head(5) %>% select(area, longitude, latitude ,geolocated.)
+```
+```{r}
+# data with or without coordinate
+table(plaques$geolocated)
+```
+```{r}
+#Example of unique areas
+plaques$area %>% unique() %>% head()
+#number of unique areas
+plaques$area %>% unique() %>% length()
+```
+
+
+### Prepare Plaque Points and Region Polygons Data
+
+To create a choropleth map of plaque distributions in the United Kingdom, we need the boundaries of regions or administrative areas. However, the dataset we obtained from the openplaques.org website only provides information on the areas where the plaques are located. These areas may not directly correspond to the administrative regions we need for mapping purposes. Hence, the ‘area’ column is not considered.
+
+Instead, the rnaturalearth package in R provides the boundary data of the administrational divisions in the UK (Natural Earth 2024). The region boundaries can be used to spatial join which allows us to assign each plaque to the appropriate regions through their geographic relations. The sf package in R is also essential for processing spatial data.
+
+Two sets of data are required for the plotting, 1) obtains a subset of geo-referenced plaques and converts them to sf object (using methods from the sf package) which contain geographic information. Do note that the coordinate referencing system (crs) is EPSG:4326 - WGS 84. 2) obtains the region boundaries using the ne_states method from the rnaturalearth package, which is also an sf object.
+
+```{r}
+# create spatial data using plaques longitude and latitude
+ plaques_pts <- 
+  plaques[plaques$geolocated=='true',] %>% #remove data without coordinate location
+  st_as_sf(coords=c("longitude","latitude"), crs=4326, remove=FALSE)  #convert to sf object containing geometry information
+
+# get regions boundaries of United Kingdom
+# Not all region names match plaques$area name 
+uk <- ne_states(country = 'united kingdom', returnclass='sf')
+```
+
+A preview plot of the two datasets suggested there is unusual data located outside the UK region boundaries. Any points outside the region boundaries are dropped during the spatial join process below.  
+
+```{r}
+# preview of the geometries
+ggplot()+
+  geom_sf(data = uk, fill='grey')+
+  geom_sf(data = plaques_pts$geometry, pch=21, cex=0.7, col="purple", bg="gray80")
+```
+
+### Spatial Joining of Plaques and Regions Data (Part 1)
+
+The spatial join results in a plaque points dataset ‘plaques_pts_joined’ which includes the information of the regions they are in, i.e., region names.
+
+##### 5A. Map Plot of UK Regions With and Without Plaques Data
+
+Visualisation 5A shows the UK regions with (red) and without (blue) plaques. In addition, a layer of plaque points is plotted on top to show the distribution of the plaques. It shows that several regions are having no plaques recorded.
+
+```{r}
+#spatial join point and region to corresponding location, left = FALSE will not include points outside the uk reigions 
+plaques_pts_joined <- st_join(plaques_pts, uk["name"], left = FALSE)
+```
+```{r}
+# Map plot of regions with and without plaques data
+ggplot()+
+  geom_sf(data=uk, aes(fill='blue'))+ # polygon of uk regions
+  geom_sf(data=uk[plaques_pts,], aes(fill='red'))+ # polygon of uk regions with plaques data=uk[plaques_pts,]
+  geom_sf(data = plaques_pts_joined$geometry, aes(col='black'), pch=1, cex=0.01)+ # point of plaque data
+  scale_fill_manual(values = c("blue", "red"), labels = c("Region with Plaque Present", "Region without Plaque Present"))+
+  scale_color_manual(values = c('black'), labels = c('Plaques'))+
+  labs(title='UK Regions With and Without Plaques Data', x='Longitude', y='Latitude', fill = "Region", color = 'Plaque')
+```
+
+### Spatial Joining of Plaques and Regions Data (Part 2): Calaulate Count of Plaques in Regions
+
+The following calculates the number of plaques in each region within the plaque points dataset ‘plaques_pts_joined’. Then, another spatial join is done to join the count number to each region in the region dataset.
+
+```{r}
+# calculate the count of plaques data in each region at the point dataset
+plaques_pts_joined_n <- plaques_pts_joined %>% 
+  rename(cnty_name=name) %>%  #create new column for region name
+  group_by(cnty_name) %>% #groupby region name 
+  mutate(n=n()) %>% #create n column and get n count
+  ungroup()
+
+# spatial join to obtain plaque counts for the region polygon dataset
+uk_joined_n <- st_join(uk, plaques_pts_joined_n, left = FALSE)
+```
+
+##### 5B. Choropleth Map of Plaque Count in UK Regions
+
+Visualisation 5B generates a choropleth map of the plaques in the UK regions. It uses colour mapping to display the number of plaques erected in each region. The colour of the regions can be referenced to the legend to find the approximate count. The map shows that there are more plaques per region in the southern part than in the northern part of the UK. However, it is hard to tell which regions had the topmost plaques count. This could be done by labelling within the map and sacrificing clarity. 
+
+```{r}
+#plot the choropleth map
+ggplot() +
+  geom_sf(data = uk, fill='black')+
+  geom_sf(data = uk_joined_n, aes(fill = n)) +
+  scale_fill_gradient(low = "blue", high = "red")+
+  labs(title='Choropleth Map of Plaque Count in UK Regions', x='Longitude', y='Latitude', fill = "Count")
+```
+
+##### Count of Plaques in Region
+
+A table is straightforward to tell the exact count of plaques of the topmost regions in the UK.
+
+```{r}
+uk_joined_n_group <- uk_joined_n %>% group_by(cnty_name) %>% count()
+uk_joined_n_group <- uk_joined_n_group[order(uk_joined_n_group$n, decreasing = TRUE),]
+head(uk_joined_n_group)
+```
+
+Furthermore, the choropleth map only colour-mapped the count of plaques. The size of each region is not taken into account. A density map could be made by calculating the region’s size.
+
+
+<!-- add references here -->
+<!-- see https://rmarkdown.rstudio.com/authoring_bibliographies_and_citations.html -->
+
+# Bibliography
+Feinerer, I. (2024) Introduction to the tm Package Text Mining in R. https://cran.r-project.org/web/packages/tm/vignettes/tm.pdf
+
+Natural Earth (2024) Admin 1 – States, Provinces. URL: https://www.naturalearthdata.com/downloads/10m-cultural-vectors/10m-admin-1-states-provinces/. Access on 23rd Apr 2024.
+
